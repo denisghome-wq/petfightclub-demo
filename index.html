@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>PetFightClub</title>
+<script id="telegram-sdk" async src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 *{box-sizing:border-box}
 [hidden]{display:none!important}
@@ -187,7 +188,7 @@ body {
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: 100%;
   max-width: 520px;
-  height: var(--tg-viewport-stable-height, 100dvh);
+  height: min(100dvh, var(--pfc-visible-height, 100dvh));
   min-height: 0;
   margin-inline: auto;
   border: 0;
@@ -752,7 +753,8 @@ body {
 
 
 /* Club screens, neutral editor and inventory sheets. */
-body{overflow:hidden}
+html,body{height:100%;overflow:hidden;overscroll-behavior:none}
+body{position:fixed;inset:0}
 .ui-icon{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 [data-icon]{display:inline-grid;place-items:center;flex:none}
 :where(h1){margin:0 0 12px;font-size:24px;line-height:28px;font-weight:900;letter-spacing:-.03em}
@@ -876,7 +878,6 @@ body{overflow:hidden}
 
 </style>
 <link rel="preload" as="image" href="./portrait_defeat.png">
-<script defer src="https://telegram.org/js/telegram-web-app.js" onload="window.Telegram.WebApp.ready(); window.Telegram.WebApp.expand();"></script>
 </head>
 <body>
 <main id="game-shell">
@@ -1023,6 +1024,42 @@ body{overflow:hidden}
 </template>
 <script src="PetFightClub-rules.js"></script>
 <script type="module">
+const visibleViewport = window.visualViewport;
+function sizeGameShell() {
+  const height = visibleViewport?.scale === 1 ? visibleViewport.height : window.innerHeight;
+  if (height > 0) document.documentElement.style.setProperty('--pfc-visible-height', height + 'px');
+}
+function restoreArenaViewport() {
+  requestAnimationFrame(() => {
+    sizeGameShell();
+    window.scrollTo(0, 0);
+    const shell = document.getElementById('game-shell');
+    if (shell.dataset.screen === 'arena') document.getElementById('chat').scrollTop = 0;
+  });
+}
+function connectTelegramViewport() {
+  const app = window.Telegram?.WebApp;
+  if (!app) return;
+  app.onEvent('viewportChanged', ({isStateStable}) => {
+    if (isStateStable) sizeGameShell();
+  });
+  app.onEvent('activated', () => {
+    if (!app.isExpanded) app.expand();
+    restoreArenaViewport();
+  });
+  app.ready();
+  app.expand();
+}
+visibleViewport?.addEventListener('resize', sizeGameShell);
+window.addEventListener('resize', sizeGameShell);
+window.addEventListener('pageshow', restoreArenaViewport);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) restoreArenaViewport();
+});
+if (window.Telegram?.WebApp) connectTelegramViewport();
+else document.getElementById('telegram-sdk').addEventListener('load', connectTelegramViewport, {once:true});
+sizeGameShell();
+
 const botPhotoBase = './assets/bot-photos/';
 const botPhotos = await fetch(botPhotoBase + 'manifest.json')
   .then(response => response.ok ? response.json() : {})
@@ -2418,6 +2455,23 @@ byId('photo').onchange = async event => {
 if (selfTest) {
   (async () => {
     byId('sample').click();
+    const root = document.documentElement;
+    const shell = byId('game-shell');
+    const previousStableHeight = root.style.getPropertyValue('--tg-viewport-stable-height');
+    root.style.setProperty('--tg-viewport-stable-height', '64px');
+    const spacer = document.createElement('div');
+    spacer.style.height = '200vh';
+    chat.append(spacer);
+    chat.scrollTop = 400;
+    if (chat.scrollTop < 1) throw Error('resume test setup');
+    window.dispatchEvent(new Event('pageshow'));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    if (chat.scrollTop !== 0 || shell.getBoundingClientRect().top !== 0 ||
+        Math.abs(shell.getBoundingClientRect().height - window.innerHeight) > 2)
+      throw Error('restore visible arena viewport');
+    spacer.remove();
+    if (previousStableHeight) root.style.setProperty('--tg-viewport-stable-height', previousStableHeight);
+    else root.style.removeProperty('--tg-viewport-stable-height');
     const file = new File(['<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg>'], 'test.svg', {type:'image/svg+xml'});
     const transfer = new DataTransfer();
     transfer.items.add(file);
