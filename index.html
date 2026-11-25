@@ -1188,15 +1188,21 @@ function showDuelDialog(pet) {
           operation = crypto.randomUUID().replaceAll('-','');
           duelOperations.set(pet,operation);
         }
-        const {url} = await duelRequest(app,'create',{operationId:operation});
+        const canShareCard = typeof app.shareMessage === 'function' && app.isVersionAtLeast?.('8.0');
+        const {url, preparedId, text} = await duelRequest(app,'create',{
+          operationId:operation, prepare:Boolean(canShareCard), language:uiLanguage
+        });
         const share = new URL('https://t.me/share/url');
         share.searchParams.set('url',url);
-        share.searchParams.set('text', uiLanguage === 'en'
+        share.searchParams.set('text', text ?? (uiLanguage === 'en'
           ? '⚔️ PetFightClub · Friendly duel\nI challenge your pet to a duel!\nOpen the link to accept within 24 hours.'
-          : '⚔️ PetFightClub · Дружеская дуэль\nВызываю твоего питомца на бой!\nОткрой ссылку, чтобы принять вызов в течение 24 часов.');
+          : '⚔️ PetFightClub · Дружеская дуэль\nВызываю твоего питомца на бой!\nОткрой ссылку, чтобы принять вызов в течение 24 часов.'));
         copy(status, 'Приглашение действует 24 часа.', 'The invitation expires in 24 hours.');
         copy(action, 'Выбрать чат', 'Choose chat');
-        action.onclick = () => app.openTelegramLink(share.href);
+        action.onclick = () => {
+          if (canShareCard && preparedId) app.shareMessage(preparedId);
+          else app.openTelegramLink(share.href);
+        };
       }
     } catch (error) {
       const messages = {
