@@ -593,6 +593,8 @@ body {
 #opponent-profile img { max-height: 36dvh; }
 .opponent-avatar { display: grid; place-items: center; min-height: 64px; }
 .opponent-avatar .ui-icon { width: 48px; height: 48px; }
+#photo-credits{margin-top:12px}
+#photo-credits li{margin-bottom:8px;overflow-wrap:anywhere}
 .opponent-data { margin: 10px 0; padding: 0; list-style: none; }
 .opponent-data li { padding: 6px 0; border-bottom: 1px solid #614c53; }
 .opponent-data small { display: block; color: var(--muted); }
@@ -886,7 +888,7 @@ body{position:fixed;inset:0}
 <section id="welcome" class="empty-state"><h1>Арена</h1><p>Добавь своего питомца и отправь его в первый бой.</p></section>
 <section class="roster" id="roster" hidden><h1>Мои бойцы</h1><div class="fighter-list" id="fighter-list"></div></section>
 <section id="inventory" class="screen-panel" hidden><h1>Трофеи</h1><div class="inventory-list"></div></section>
-<section id="more" class="screen-panel" hidden><h1>Опции</h1><div class="language-control"><label for="language">Язык</label><select id="language"><option value="ru" lang="ru">Русский</option><option value="en" lang="en">English</option></select></div><details><summary>Правила арены</summary><p>Бой проходит автоматически. За победы начисляется опыт и может выпасть трофей. Три победы подряд дают серию с бонусом опыта.</p></details></section>
+<section id="more" class="screen-panel" hidden><h1>Опции</h1><div class="language-control"><label for="language">Язык</label><select id="language"><option value="ru" lang="ru">Русский</option><option value="en" lang="en">English</option></select></div><details><summary>Правила арены</summary><p>Бой проходит автоматически. За победы начисляется опыт и может выпасть трофей. Три победы подряд дают серию с бонусом опыта.</p></details><details id="photo-credits"><summary>Источники фотографий</summary><ul></ul></details></section>
 <div class="actions" id="setup">
 <input class="file" id="photo" type="file" accept="image/*">
 <label class="action primary" for="photo" tabindex="0">Добавить питомца</label>
@@ -921,7 +923,7 @@ body{position:fixed;inset:0}
 </main>
 <dialog class="photo-viewer" id="photo-viewer" aria-labelledby="photo-title">
 <div class="photo-header"><strong id="photo-title"></strong><form method="dialog"><button>Закрыть</button></form></div>
-<img id="full-photo" alt=""><small id="photo-credit"></small>
+<img id="full-photo" alt="">
 <div class="actions"><button id="share-photo" type="button" hidden>Поделиться</button></div>
 </dialog>
 <dialog class="photo-viewer sheet" id="frame-picker" aria-labelledby="frame-picker-title">
@@ -1073,7 +1075,7 @@ const EN_STATS = {str:'Strength', agi:'Agility', vit:'Vitality', dex:'Accuracy',
 const EN_SPECIES = {dog:'Dog',cat:'Cat',bird:'Bird',fish:'Fish',reptile:'Reptile',rodent:'Rodent'};
 const EN_COPY = new Map(Object.entries({
   'Игра':'Game','Арена':'Arena','Мои бойцы':'My fighters','Бойцы':'Fighters','Трофеи':'Trophies',
-  'Опции':'Settings','Язык':'Language','Правила арены':'Arena rules','Прокачка':'Upgrades',
+  'Опции':'Settings','Источники фотографий':'Photo credits','Язык':'Language','Правила арены':'Arena rules','Прокачка':'Upgrades',
   'Боевые показатели':'Combat stats',
   'Добавь своего питомца и отправь его в первый бой.':'Add a pet and send them into their first fight.',
   'Бой проходит автоматически. За победы начисляется опыт и может выпасть трофей. Три победы подряд дают серию с бонусом опыта.':
@@ -1323,7 +1325,7 @@ function image(url, cls, alt) {
   return item;
 }
 
-function setAvatar(fighter, name, avatar, original, inspect, credit) {
+function setAvatar(fighter, name, avatar, original, inspect) {
   const previous = fighter.querySelector('.face');
   const face = document.createElement(original || inspect ? 'button' : 'span');
   face.className = 'face';
@@ -1331,7 +1333,7 @@ function setAvatar(fighter, name, avatar, original, inspect, credit) {
     face.type = 'button';
     copy(face, (inspect ? 'Осмотреть соперника: ' : 'Открыть фото: ') + name,
       (inspect ? 'Inspect opponent: ' : 'View photo of ') + name, 'aria-label');
-    face.onclick = inspect || (() => openPhoto(name, original, credit));
+    face.onclick = inspect || (() => openPhoto(name, original));
   } else {
     face.setAttribute('aria-hidden', 'true');
   }
@@ -1339,12 +1341,11 @@ function setAvatar(fighter, name, avatar, original, inspect, credit) {
   previous.replaceWith(face);
 }
 
-async function openPhoto(name, url, entry) {
+async function openPhoto(name, url) {
   byId('photo-title').textContent = name;
   const photo = byId('full-photo');
   copy(photo, 'Фото питомца: ' + name, 'Photo of ' + name, 'alt');
   photo.src = url;
-  photoCredits(byId('photo-credit'), entry);
   const share = byId('share-photo');
   share.hidden = true;
   viewer.showModal();
@@ -1604,7 +1605,7 @@ function createPet(name, url, original, species = 'cat', portraitCrop) {
   });
   card.querySelector('.pet').textContent = name;
   card.querySelector('.pet').title = name;
-  setAvatar(card.querySelector('.fighter'), name, url || species, original, null, portraitCrop?.credit);
+  setAvatar(card.querySelector('.fighter'), name, url || species, original);
   const button = card.querySelector('.primary');
   const pet = {name, species, avatar:url, original, portraitCrop, card, button, fights:0, wins:0, streak:0, running:false, level:1, exp:0, points:0,
     slots:[null, null, null], loot:[],
@@ -2117,7 +2118,7 @@ function showOpponent(pet, identity = pickBotName()) {
   const photo = entry ? botPhotoBase + entry.photo : (opponent.name === demoOpponent.name ? demoPhoto : '');
   const avatar = entry ? botPhotoBase + entry.avatar : photo;
   setAvatar(card.querySelector('.foe'), opponent.name, avatar || opponent.species, photo,
-    () => openOpponentProfile(opponent, photo, entry));
+    () => openOpponentProfile(opponent, photo));
   paintStreak(card.querySelector('.foe'), opponentStreaks.get(opponent.name) ?? 0);
   card.querySelector('.foe strong').textContent = opponent.name;
   card.querySelector('.foe strong').title = opponent.name;
@@ -2131,8 +2132,6 @@ function showOpponent(pet, identity = pickBotName()) {
 }
 
 function photoCredits(credit, entry) {
-  credit.replaceChildren();
-  if (!entry) return;
   for (const [url, label] of [[entry.source, entry.author + ' · ' + entry.title], [entry.licenseUrl, entry.license]]) {
     const link = document.createElement('a');
     link.href = url;
@@ -2140,10 +2139,28 @@ function photoCredits(credit, entry) {
     link.target = '_blank';
     credit.append(link, ' · ');
   }
-  credit.append(entry.changes);
+  credit.append(copyText('Полный кадр уменьшен, аватар кадрирован под круглую рамку. Оба файла сохранены в JPG.', entry.changes));
 }
+function renderPhotoCredits() {
+  const list = byId('photo-credits').querySelector('ul');
+  if (list.childElementCount) return;
+  const demo = document.createElement('li');
+  demo.textContent = 'Chelsea · Stefan van der Walt · CC0';
+  list.append(demo);
+  for (const entry of Object.values(botPhotos).flat()) {
+    const item = document.createElement('li');
+    const title = document.createElement('strong');
+    copy(title, entry.name, entry.nameEn);
+    item.append(title, ' — ');
+    photoCredits(item, entry);
+    list.append(item);
+  }
+}
+byId('photo-credits').ontoggle = event => {
+  if (event.currentTarget.open) renderPhotoCredits();
+};
 
-function openOpponentProfile(opponent, photo, entry) {
+function openOpponentProfile(opponent, photo) {
   const profile = byId('opponent-profile');
   const talent = withTalent(opponent).stats;
   const equipped = withEquipment(opponent);
@@ -2151,11 +2168,6 @@ function openOpponentProfile(opponent, photo, entry) {
   profile.querySelector('.opponent-avatar').replaceChildren(photo
     ? copy(image(photo, '', ''), 'Фото питомца: ' + opponent.name, 'Photo of ' + opponent.name, 'alt')
     : icon(opponent.species));
-  if (entry) {
-    const credit = document.createElement('small');
-    photoCredits(credit, entry);
-    profile.querySelector('.opponent-avatar').append(credit);
-  }
   copy(profile.querySelector('.opponent-summary'), fighterMeta(opponent) + ' · Макс. HP: ' + health(equipped),
     fighterMeta(opponent, true) + ' · Max HP: ' + health(equipped));
   const streak = opponentStreaks.get(opponent.name) ?? 0;
@@ -2597,7 +2609,10 @@ if (selfTest) {
       avatar.closest('button').click();
       const photo = profile.querySelector('img');
       if (photo.src !== avatar.src.replace(/avatar\.jpg$/, 'photo.jpg') ||
-          profile.querySelectorAll('.opponent-avatar a').length !== 2) throw Error('bot photo and credits');
+          profile.querySelector('.opponent-avatar a')) throw Error('bot photo without inline credits');
+      renderPhotoCredits();
+      if (byId('photo-credits').querySelectorAll('li').length !== Object.values(botPhotos).flat().length + 1 ||
+          !byId('photo-credits').querySelector('li a')) throw Error('photo credits in settings');
       await photo.decode();
       profile.close();
     }
