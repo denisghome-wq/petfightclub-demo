@@ -748,6 +748,17 @@ body {
   flex: 0 0 21px;
 }
 
+.game-nav .nav-notification {
+  position: absolute;
+  top: calc(50% - 22px);
+  left: calc(50% + 8px);
+  width: 10px;
+  height: 10px;
+  border: 1px solid #2b2230;
+  border-radius: 50%;
+  background: #ff626d;
+  pointer-events: none;
+}
 .game-nav button[data-screen]:focus-visible { outline-offset: -3px; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -916,8 +927,8 @@ body{position:fixed;inset:0}
 <nav class="game-nav" aria-label="Разделы игры">
 <button type="button" data-screen="arena" aria-current="page"><span data-icon="swords"></span>Арена</button>
 <button type="button" data-screen="fighters"><span data-icon="cat"></span>Бойцы</button>
-<button type="button" data-screen="upgrade"><span data-icon="rank"></span>Прокачка</button>
-<button type="button" data-screen="loot"><span data-icon="cup"></span>Трофеи</button>
+<button type="button" data-screen="upgrade"><span data-icon="rank"></span>Прокачка<span class="nav-notification" aria-hidden="true" hidden></span></button>
+<button type="button" data-screen="loot"><span data-icon="cup"></span>Трофеи<span class="nav-notification" aria-hidden="true" hidden></span></button>
 <button type="button" data-screen="more"><span data-icon="gear"></span>Опции</button>
 </nav>
 </main>
@@ -1739,6 +1750,16 @@ function activatePet(pet) {
 }
 
 const nav = document.querySelector('.game-nav');
+function refreshNavNotifications() {
+  for (const [section, visible, ru, en] of [
+    ['loot', current?.hasNewTrophies, 'Новые трофеи', 'New trophies'],
+    ['upgrade', current?.points > 0, 'Есть очки прокачки', 'Unspent stat points']
+  ]) {
+    const button = nav.querySelector('[data-screen="' + section + '"]');
+    button.querySelector('.nav-notification').hidden = !visible;
+    copy(button, visible ? ru : '', visible ? en : '', 'aria-description');
+  }
+}
 function setScreen(next) {
   if (!editor.hidden) return;
   screen = next;
@@ -1762,8 +1783,12 @@ function setScreen(next) {
     const upgrade = current.card.querySelector('.upgrade');
     upgrade.hidden = next !== 'upgrade';
 
-    if (next === 'loot') renderInventory(current);
+    if (next === 'loot') {
+      current.hasNewTrophies = false;
+      renderInventory(current);
+    }
   }
+  refreshNavNotifications();
   chat.scrollTop = 0;
 }
 nav.querySelectorAll('button').forEach(button => button.onclick = () => setScreen(button.dataset.screen));
@@ -1875,6 +1900,10 @@ function refreshSlots(pet) {
 
 function openLoot(pet, index, readOnly) {
   if (pet !== current || (!readOnly && pet.running)) return;
+  if (!readOnly && pet.hasNewTrophies) {
+    pet.hasNewTrophies = false;
+    refreshNavNotifications();
+  }
   const menu = byId('loot-menu');
   const active = (readOnly ? pet.opponent.slots : pet.slots)[index];
   copy(byId('loot-title'), (readOnly ? 'Соперник: ' + pet.opponent.name : 'Трофей') + ' · слот ' + (index + 1),
@@ -1953,6 +1982,8 @@ function rewardTrophy(pet, opponent, won, random = Math.random) {
     pet.loot.splice(oldestSpare, 1);
   }
   pet.loot.push(trophy);
+  pet.hasNewTrophies = pet !== current || screen !== 'loot';
+  if (pet === current) refreshNavNotifications();
   return trophy;
 }
 
@@ -2042,7 +2073,10 @@ function refreshUpgrade(pet) {
   copy(pet.card.querySelector('.fighter:not(.foe) .fighter-meta'), fighterMeta(pet), fighterMeta(pet, true));
   copy(pet.pick.querySelector('.roster-meta'), fighterMeta(pet) + ' · ' + pet.wins + ' побед / ' + losses + ' пораж.',
     fighterMeta(pet, true) + ' · ' + pet.wins + ' W / ' + losses + ' L');
-  if (screen === 'loot' && current === pet) renderInventory(pet);
+  if (current === pet) {
+    if (screen === 'loot') renderInventory(pet);
+    refreshNavNotifications();
+  }
   const xpBar = pet.card.querySelector('.xp-bar');
   xpBar.max = xpToNextLevel(pet.level);
   xpBar.value = pet.exp;
@@ -2659,7 +2693,8 @@ if (selfTest) {
     const opponent = makeOpponent(current, () => .5);
     const damage = () => attack(current, opponent, () => .5).damage;
     const oldDamage = damage();
-    if (upgrade.hidden || current.points !== 2 || plus.disabled || !minus.disabled || !confirm.disabled) throw Error('level up');
+    const pointsDot = nav.querySelector('[data-screen="upgrade"] .nav-notification');
+    if (upgrade.hidden || current.points !== 2 || plus.disabled || !minus.disabled || !confirm.disabled || pointsDot.hidden) throw Error('level up and unspent points dot');
     plus.click();
     if (current.points !== 2 || current.stats.str !== 1 || damage() !== oldDamage ||
         strength.querySelector('.stat-draft')?.textContent !== '+1' || confirm.disabled) throw Error('draft not applied');
@@ -2675,7 +2710,7 @@ if (selfTest) {
         Number(hpMetric().firstChild.textContent) !== oldHP ||
         !(Number(hpMetric().querySelector('strong')?.textContent) > oldHP)) throw Error('combat stat preview');
     confirm.click();
-    if (!plus.disabled || !confirm.disabled || current.points !== 0 || current.stats.str !== 2 ||
+    if (!plus.disabled || !confirm.disabled || current.points !== 0 || !pointsDot.hidden || current.stats.str !== 2 ||
         damage() <= oldDamage || health(current) <= oldHP || draftTotal(current) ||
         hpMetric().querySelector('strong') || Number(hpMetric().textContent) !== health(current)) throw Error('apply upgrade');
     if (hitChance(5, 8) <= hitChance(1, 8) || hitChance(5, 8) >= hitChance(5, 1)) throw Error('hit versus flee');
@@ -2705,7 +2740,10 @@ if (selfTest) {
       if (rewardTrophy(current, defeated, true, () => .10)) throw Error('drop chance or guaranteed drop');
     }
     const old = rewardTrophy(current, defeated, true, () => .0999);
+    const trophyDot = nav.querySelector('[data-screen="loot"] .nav-notification');
+    if (trophyDot.hidden) throw Error('new trophy dot');
     slots[0].click();
+    if (!trophyDot.hidden) throw Error('clear trophy dot when viewing own trophies');
     if (!byId('loot-items').textContent.includes('Шпрот')) throw Error('trophy source');
     const trophyArt = byId('loot-items').querySelector('img');
     if (!trophyArt?.src.endsWith('/trophies/whisker.png')) throw Error('trophy item art');
