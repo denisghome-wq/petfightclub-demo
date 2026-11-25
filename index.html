@@ -952,7 +952,6 @@ body{position:fixed;inset:0}
 </dialog>
 <dialog class="photo-viewer sheet" id="duel-preview" aria-labelledby="duel-title">
 <div class="photo-header"><strong id="duel-title">Дружеская дуэль</strong><form method="dialog"><button>Закрыть</button></form></div>
-<p>Игра автоматически выравнивает уровень и бюджет статов.</p>
 <p id="duel-stats"></p>
 <p id="duel-status" role="status" hidden></p>
 <button id="duel-action" type="button" hidden></button>
@@ -1103,7 +1102,7 @@ const EN_COPY = new Map(Object.entries({
   'Все вложенные очки вернутся. Уровень, опыт и трофеи сохранятся. Стартовый сброс расходуется первым.':
     'Get all spent stat points back and keep your level, XP, and trophies. The starter reset is used first.',
   'Покупка сбросов пока недоступна в браузерной версии.':'Stat reset purchases are unavailable in the browser preview.',
-  'Дружеская дуэль':'Friendly duel','Игра автоматически выравнивает уровень и бюджет статов.':'Both fighters get the same level and stat budget.',
+  'Дружеская дуэль':'Friendly duel',
   'Приглашение отправляется из игрового Telegram-бота. В браузерной версии отправка пока не подключена.':
     'Send duel invites through the Telegram game bot. Invites are unavailable in the browser preview.',
   'Характеристики':'Stats','Лог боя':'Fight log','События боя':'Combat events','Уровень 1 · соперник найден':'Level 1 · Match found',
@@ -1193,8 +1192,8 @@ function showDuelDialog(pet) {
         const share = new URL('https://t.me/share/url');
         share.searchParams.set('url',url);
         share.searchParams.set('text', uiLanguage === 'en'
-          ? '⚔️ PetFightClub · Friendly duel\nI challenge your pet to a duel! Both fighters play at level 5 with 10 stat points each. No XP or ranking changes.\nOpen the link to accept within 24 hours.'
-          : '⚔️ PetFightClub · Дружеская дуэль\nВызываю твоего питомца на бой! Оба бойца играют на 5-м уровне с 10 очками характеристик. Опыт и рейтинг не меняются.\nОткрой ссылку, чтобы принять вызов в течение 24 часов.');
+          ? '⚔️ PetFightClub · Friendly duel\nI challenge your pet to a duel!\nOpen the link to accept within 24 hours.'
+          : '⚔️ PetFightClub · Дружеская дуэль\nВызываю твоего питомца на бой!\nОткрой ссылку, чтобы принять вызов в течение 24 часов.');
         copy(status, 'Приглашение действует 24 часа.', 'The invitation expires in 24 hours.');
         copy(action, 'Выбрать чат', 'Choose chat');
         action.onclick = () => app.openTelegramLink(share.href);
@@ -1753,8 +1752,7 @@ function createPet(name, url, original, species = 'cat', portraitCrop) {
   });
   card.querySelector('.invite').onclick = () => {
     if (pet !== current || pet.running || !editor.hidden) return;
-    copy(byId('duel-stats'), pet.name + ' · боевой уровень ' + DUEL_LEVEL + ' · по ' + DUEL_POINTS + ' очков.',
-      pet.name + ' · Level ' + DUEL_LEVEL + ' · ' + DUEL_POINTS + ' stat points per fighter');
+    byId('duel-stats').textContent = pet.name;
     showDuelDialog(pet);
   };
   card.querySelectorAll('[data-stat]').forEach(item => {
