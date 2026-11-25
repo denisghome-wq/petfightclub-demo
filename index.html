@@ -1192,6 +1192,9 @@ function showDuelDialog(pet) {
         const {url} = await duelRequest(app,'create',{operationId:operation});
         const share = new URL('https://t.me/share/url');
         share.searchParams.set('url',url);
+        share.searchParams.set('text', uiLanguage === 'en'
+          ? '⚔️ PetFightClub · Friendly duel\nI challenge your pet to a duel! Both fighters play at level 5 with 10 stat points each. No XP or ranking changes.\nOpen the link to accept within 24 hours.'
+          : '⚔️ PetFightClub · Дружеская дуэль\nВызываю твоего питомца на бой! Оба бойца играют на 5-м уровне с 10 очками характеристик. Опыт и рейтинг не меняются.\nОткрой ссылку, чтобы принять вызов в течение 24 часов.');
         copy(status, 'Приглашение действует 24 часа.', 'The invitation expires in 24 hours.');
         copy(action, 'Выбрать чат', 'Choose chat');
         action.onclick = () => app.openTelegramLink(share.href);
