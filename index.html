@@ -1166,10 +1166,13 @@ function showDuelDialog(pet) {
   status.hidden = true;
   action.hidden = !inTelegram;
   action.disabled = false;
-  if (!dialog.open) dialog.showModal();
+  if ((!inTelegram || id) && !dialog.open) dialog.showModal();
   if (!inTelegram) return;
-  copy(action, id ? 'Принять вызов' : 'Создать приглашение', id ? 'Accept challenge' : 'Create invitation');
+  const inviteButton = pet.card.querySelector('.invite');
+  copy(action, id ? 'Принять вызов' : 'Повторить', id ? 'Accept challenge' : 'Retry');
   action.onclick = async () => {
+    if (inviteButton.disabled) return;
+    inviteButton.disabled = true;
     action.disabled = true;
     status.hidden = false;
     copy(status, 'Подключение…', 'Connecting…');
@@ -1197,14 +1200,18 @@ function showDuelDialog(pet) {
         share.searchParams.set('text', text ?? (uiLanguage === 'en'
           ? '⚔️ PetFightClub · Friendly duel\nI challenge your pet to a duel!\nOpen the link to accept within 24 hours.'
           : '⚔️ PetFightClub · Дружеская дуэль\nВызываю твоего питомца на бой!\nОткрой ссылку, чтобы принять вызов в течение 24 часов.'));
-        copy(status, 'Приглашение действует 24 часа.', 'The invitation expires in 24 hours.');
-        copy(action, 'Выбрать чат', 'Choose chat');
-        action.onclick = () => {
-          if (canShareCard && preparedId) app.shareMessage(preparedId);
-          else app.openTelegramLink(share.href);
-        };
+        if (dialog.open) dialog.close();
+        if (canShareCard && preparedId) {
+          app.shareMessage(preparedId, sent => {
+            if (sent) duelOperations.delete(pet);
+          });
+        } else {
+          app.openTelegramLink(share.href);
+          duelOperations.delete(pet);
+        }
       }
     } catch (error) {
+      if (!dialog.open) dialog.showModal();
       const messages = {
         expired:['Срок приглашения истёк.','The invitation has expired.'],
         self:['Это твоё приглашение.','This is your invitation.'],
@@ -1215,8 +1222,10 @@ function showDuelDialog(pet) {
         ['Не удалось подключиться к дуэли.','Could not connect to the duel.']));
     } finally {
       action.disabled = false;
+      inviteButton.disabled = false;
     }
   };
+  if (!id) action.click();
 }
 
 function copy(node, ru, en, attribute = '') {
