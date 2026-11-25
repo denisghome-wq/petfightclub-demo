@@ -954,7 +954,9 @@ body{position:fixed;inset:0}
 <div class="photo-header"><strong id="duel-title">Дружеская дуэль</strong><form method="dialog"><button>Закрыть</button></form></div>
 <p>Игра автоматически выравнивает уровень и бюджет статов.</p>
 <p id="duel-stats"></p>
-<p>Приглашение отправляется из игрового Telegram-бота. В браузерной версии отправка пока не подключена.</p>
+<p id="duel-status" role="status" hidden></p>
+<button id="duel-action" type="button" hidden></button>
+<p id="duel-browser-note">Приглашение отправляется из игрового Telegram-бота. В браузерной версии отправка пока не подключена.</p>
 </dialog>
 <dialog class="photo-viewer sheet" id="opponent-profile" aria-labelledby="opponent-title">
 <div class="photo-header"><strong id="opponent-title"></strong><form method="dialog"><button>Закрыть</button></form></div>
@@ -1133,6 +1135,82 @@ function applyCopy(node) {
     else node.textContent = text;
   }
 }
+const DUEL_API = 'https://petfightclub-connectivity.denis-ghome.workers.dev/duel';
+let shownDuelId;
+const duelOperations = new WeakMap();
+
+function incomingDuelId() {
+  const raw = new URLSearchParams(window.Telegram?.WebApp?.initData ?? '').get('start_param');
+  const match = /^d_([a-f0-9]{32})$/.exec(raw ?? '');
+  return match && match[1] !== shownDuelId ? match[1] : null;
+}
+
+async function duelRequest(app, command, args) {
+  const response = await fetch(DUEL_API+'/'+command, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({...args,initData:app.initData})
+  });
+  const data = await response.json();
+  if (!response.ok) throw Error(data.error);
+  return data;
+}
+
+function showDuelDialog(pet) {
+  const app = window.Telegram?.WebApp;
+  const dialog = byId('duel-preview');
+  const status = byId('duel-status');
+  const action = byId('duel-action');
+  const id = incomingDuelId();
+
+  const inTelegram = Boolean(app?.initData);
+  byId('duel-browser-note').hidden = inTelegram;
+  status.hidden = true;
+  action.hidden = !inTelegram;
+  action.disabled = false;
+  if (!dialog.open) dialog.showModal();
+  if (!inTelegram) return;
+  copy(action, id ? 'Принять вызов' : 'Создать приглашение', id ? 'Accept challenge' : 'Create invitation');
+  action.onclick = async () => {
+    action.disabled = true;
+    status.hidden = false;
+    copy(status, 'Подключение…', 'Connecting…');
+    try {
+      await duelRequest(app,'register',{species:pet.species});
+      if (id) {
+        const {result,side} = await duelRequest(app,'accept',{id});
+        shownDuelId = id;
+        const won = result.won === (side === 0);
+        copy(status, won ? 'Победа в дружеской дуэли!' : 'Поражение в дружеской дуэли!',
+          won ? 'Friendly duel won!' : 'Friendly duel lost!');
+        action.hidden = true;
+      } else {
+        let operation = duelOperations.get(pet);
+        if (!operation) {
+          operation = crypto.randomUUID().replaceAll('-','');
+          duelOperations.set(pet,operation);
+        }
+        const {url} = await duelRequest(app,'create',{operationId:operation});
+        const share = new URL('https://t.me/share/url');
+        share.searchParams.set('url',url);
+        copy(status, 'Приглашение действует 24 часа.', 'The invitation expires in 24 hours.');
+        copy(action, 'Выбрать чат', 'Choose chat');
+        action.onclick = () => app.openTelegramLink(share.href);
+      }
+    } catch (error) {
+      const messages = {
+        expired:['Срок приглашения истёк.','The invitation has expired.'],
+        self:['Это твоё приглашение.','This is your invitation.'],
+        claimed:['Приглашение уже приняли.','The invitation has already been accepted.'],
+        auth:['Переоткрой игру из Telegram.','Reopen the game from Telegram.']
+      };
+      copy(status, ...(Object.hasOwn(messages,error.message) ? messages[error.message] :
+        ['Не удалось подключиться к дуэли.','Could not connect to the duel.']));
+    } finally {
+      action.disabled = false;
+    }
+  };
+}
+
 function copy(node, ru, en, attribute = '') {
   if (!copyBindings.has(node)) copyBindings.set(node, new Map());
   copyBindings.get(node).set(attribute, [ru, en]);
@@ -1674,7 +1752,7 @@ function createPet(name, url, original, species = 'cat', portraitCrop) {
     if (pet !== current || pet.running || !editor.hidden) return;
     copy(byId('duel-stats'), pet.name + ' · боевой уровень ' + DUEL_LEVEL + ' · по ' + DUEL_POINTS + ' очков.',
       pet.name + ' · Level ' + DUEL_LEVEL + ' · ' + DUEL_POINTS + ' stat points per fighter');
-    byId('duel-preview').showModal();
+    showDuelDialog(pet);
   };
   card.querySelectorAll('[data-stat]').forEach(item => {
     const stat = item.dataset.stat;
@@ -1743,6 +1821,7 @@ function activatePet(pet) {
   if (loading || current?.running || !editor.hidden) return;
   if (current) current.card.hidden = true;
   current = pet;
+  if (incomingDuelId() && !byId("duel-preview").open) showDuelDialog(pet);
   pet.card.hidden = false;
   fighters.forEach(fighter => fighter.pick.setAttribute('aria-pressed', String(fighter === pet)));
   byId('setup').before(pet.card);
@@ -2558,6 +2637,8 @@ if (selfTest) {
         frameUnlocked(achievement, {...current, wins:99}, new Set()) ||
         frameUnlocked(shopFrame, current, new Set()) ||
         !frameUnlocked(shopFrame, current, new Set(['astral']))) throw Error('frame unlock rules');
+    const previousCoins = coins;
+    if (!FRAME_PREVIEW) coins = shopFrame.price;
     current.pick.parentElement.lastElementChild.click();
     const framePicker = byId('frame-picker');
     const choice = framePicker.querySelector('[data-frame="astral"]');
@@ -2588,6 +2669,8 @@ if (selfTest) {
     const playerPortrait = current.card.querySelector('.fighter:not(.foe) .portrait');
     if (framePicker.open || !getComputedStyle(playerPortrait, '::before').backgroundImage.includes('frames/astral.png'))
       throw Error('apply custom frame');
+    coins = previousCoins;
+    ownedProducts.delete(shopFrame.id);
     current.pick.parentElement.lastElementChild.click();
     framePicker.querySelector('[data-frame="default"]').click();
     byId('apply-frame').click();
