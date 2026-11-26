@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>PetFightClub</title>
-<script id="telegram-sdk" async src="https://telegram.org/js/telegram-web-app.js"></script>
+<script id="telegram-sdk" src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 *{box-sizing:border-box}
 [hidden]{display:none!important}
@@ -1418,9 +1418,14 @@ editor.onsubmit = event => {
   canvas.getContext('2d').drawImage(source, crop.x, crop.y, crop.size, crop.size, 0, 0, canvas.width, canvas.height);
   const url = canvas.toDataURL('image/jpeg', .9);
   const original = crop.url;
+  const photoFile = crop.file;
   const portraitCrop = {width:source.naturalWidth, height:source.naturalHeight, x:crop.x, y:crop.y, size:crop.size};
   closeEditor(true);
-  createPet(name, url, original, speciesSelect.value, portraitCrop);
+  const pet = createPet(name, url, original, speciesSelect.value, portraitCrop);
+  if (pet) {
+    pet.photoFile = photoFile;
+    saveFighters();
+  }
 };
 
 function image(url, cls, alt) {
@@ -1644,6 +1649,7 @@ function openFramePicker(pet) {
       paintPhotoCrop(portrait.querySelector('.face img'), photoCrop.source ?? pet.original, photoCrop);
     }
     picker.close();
+    saveFighters();
   };
   choices.replaceChildren(...PORTRAIT_FRAMES.map(frame => {
     const button = document.createElement('button');
@@ -1799,6 +1805,7 @@ function createPet(name, url, original, species = 'cat', portraitCrop) {
       pet.draft[stat] = 0;
     }
     pet.points -= total;
+    saveFighters();
     refreshUpgrade(pet);
     if (hpChanged) refreshArenaHealth(pet);
   };
@@ -1812,6 +1819,7 @@ function createPet(name, url, original, species = 'cat', portraitCrop) {
       for (const stat of Object.keys(pet.draft)) pet.draft[stat] = 0;
       if (freeResetUsed) earnedResets--;
       else freeResetUsed = true;
+      saveFighters();
       resetDialog.close();
       refreshUpgrade(pet);
       fighters.forEach(refreshFreeReset);
@@ -1837,11 +1845,12 @@ function activatePet(pet) {
   if (loading || current?.running || !editor.hidden) return;
   if (current) current.card.hidden = true;
   current = pet;
-  if (incomingDuelId() && !byId("duel-preview").open) showDuelDialog(pet);
+  if (!restoringFighters && incomingDuelId() && !byId("duel-preview").open) showDuelDialog(pet);
   pet.card.hidden = false;
   fighters.forEach(fighter => fighter.pick.setAttribute('aria-pressed', String(fighter === pet)));
   byId('setup').before(pet.card);
   setScreen('arena');
+  saveFighters();
 }
 
 const nav = document.querySelector('.game-nav');
@@ -1975,6 +1984,7 @@ function renderInventory(pet) {
       if (index === -1) return;
       pet.loot.splice(index, 1);
       coins += TROPHY_SALE;
+      saveFighters();
       renderInventory(pet);
     };
     row.append(trophyIcon(item), copyText(trophyText(item), trophyText(item, true)), sell);
@@ -2052,6 +2062,7 @@ function openLoot(pet, index, readOnly) {
     button.onclick = () => {
       if (pet !== current || pet.running || (item && pet.slots.includes(item))) return;
       pet.slots[index] = item;
+      saveFighters();
       if (!pet.awaitingNextFight) refreshOpponentSlots(pet);
       refreshUpgrade(pet);
       refreshArenaHealth(pet);
@@ -2535,6 +2546,7 @@ async function fight(pet) {
   fighters.forEach(fighter => fighter.pick.disabled = false);
   pet.running = false;
   refreshUpgrade(pet);
+  saveFighters();
 }
 
 byId('sample').onclick = () => {
@@ -2579,7 +2591,7 @@ byId('photo').onchange = async event => {
     loading = false;
     if (current) current.button.disabled = false;
   }
-  crop = {url};
+  crop = {url,file};
   const w = source.naturalWidth, h = source.naturalHeight;
   const size = .82 * Math.min(w, h);
   editor.hidden = false;
@@ -2592,6 +2604,90 @@ byId('photo').onchange = async event => {
   updateCrop((w - size) / 2, (h - size) / 2, size);
   editor.scrollIntoView({block:'nearest'});
 };
+
+const persistentFighterFields = ['name','species','avatar','portraitCrop','frameId','fights','wins','streak',
+  'level','exp','points','slots','loot','stats','hasNewTrophies','photoFile'];
+let fighterStorage;
+let restoringFighters = false;
+let saveQueue = Promise.resolve();
+
+// This save belongs to the current Telegram WebView or browser profile.
+function openFighterStorage() {
+  return new Promise((resolve,reject) => {
+    const request = indexedDB.open('petfightclub',1);
+    request.onupgradeneeded = () => request.result.createObjectStore('saves');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function fighterSaveKey() {
+  return String(window.Telegram?.WebApp?.initDataUnsafe?.user?.id ?? 'browser');
+}
+
+function fighterSaveError() {
+  const notice = byId('notice');
+  notice.hidden = false;
+  copy(notice,'Не удалось сохранить бойцов на устройстве.','Could not save fighters on this device.');
+}
+
+function saveFighters() {
+  if (selfTest || restoringFighters || !fighterStorage) return;
+  const saved = structuredClone({
+    active:fighters.indexOf(current), coins, freeResetUsed, earnedResets, ownedProducts:[...ownedProducts],
+    fighters:fighters.map(pet => ({
+      ...Object.fromEntries(persistentFighterFields.map(field => [field,pet[field]])),
+      original:pet.photoFile ? null : pet.original
+    }))
+  });
+  saveQueue = saveQueue.then(() => new Promise((resolve,reject) => {
+    const transaction = fighterStorage.transaction('saves','readwrite');
+    transaction.objectStore('saves').put(saved,fighterSaveKey());
+    transaction.oncomplete = resolve;
+    transaction.onabort = () => reject(transaction.error);
+  })).catch(fighterSaveError);
+  return saveQueue;
+}
+
+async function restoreFighters() {
+  restoringFighters = true;
+  try {
+    fighterStorage = await openFighterStorage();
+    const saved = await new Promise((resolve,reject) => {
+      const request = fighterStorage.transaction('saves').objectStore('saves').get(fighterSaveKey());
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    if (!Array.isArray(saved?.fighters)) return;
+    ({coins, freeResetUsed, earnedResets} = saved);
+    saved.ownedProducts.forEach(product => ownedProducts.add(product));
+    for (const record of saved.fighters) {
+      const original = record.photoFile ? URL.createObjectURL(record.photoFile) : record.original;
+      const pet = createPet(record.name,record.avatar,original,record.species,record.portraitCrop);
+      Object.assign(pet,record,{original});
+      const portrait = pet.card.querySelector('.fighter:not(.foe) .portrait');
+      if (pet.frameId) paintPortraitFrame(portrait,pet.frameId);
+      if (pet.portraitCrop && original) {
+        paintPhotoCrop(portrait.querySelector('.face img'),pet.portraitCrop.source ?? original,pet.portraitCrop);
+      }
+      refreshUpgrade(pet);
+      refreshArenaHealth(pet);
+    }
+    restoringFighters = false;
+    if (fighters.length) activatePet(fighters[saved.active] ?? fighters[0]);
+  } catch {
+    fighterSaveError();
+  } finally {
+    restoringFighters = false;
+  }
+}
+
+if (!selfTest) {
+  const setupControls = [byId('sample'),byId('photo')];
+  setupControls.forEach(control => control.disabled = true);
+  await restoreFighters();
+  setupControls.forEach(control => control.disabled = false);
+}
 
 if (selfTest) {
   (async () => {
