@@ -1134,7 +1134,8 @@ function applyCopy(node) {
     else node.textContent = text;
   }
 }
-const DUEL_API = 'https://petfightclub-connectivity.denis-ghome.workers.dev/duel';
+const GAME_API = 'https://petfightclub-connectivity.denis-ghome.workers.dev';
+const DUEL_API = GAME_API+'/duel';
 let shownDuelId;
 const duelOperations = new WeakMap();
 
@@ -1145,12 +1146,17 @@ function incomingDuelId() {
 }
 
 async function duelRequest(app, command, args) {
-  const response = await fetch(DUEL_API+'/'+command, {
+  return gameRequest(app, DUEL_API+'/'+command, args);
+}
+
+async function gameRequest(app, url, args) {
+  const response = await fetch(url, {
     method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({...args,initData:app.initData})
   });
   const data = await response.json();
-  if (!response.ok) throw Error(data.error);
+  if (!response.ok) throw Object.assign(Error(data.error),{retry:data.retry});
+
   return data;
 }
 
@@ -1640,8 +1646,16 @@ function openFramePicker(pet) {
     else if (price) apply.replaceChildren(copyText('Купить и применить · ', 'Buy and apply · '), coinAmount(price));
     else apply.replaceChildren(copyText('Рамка закрыта', 'Frame locked'));
   };
-  apply.onclick = () => {
-    if (!FRAME_PREVIEW && !frameUnlocked(selectedFrame, pet, ownedProducts) && !buyFrame(selectedFrame)) return;
+  apply.onclick = async () => {
+    if (pet.cloudId) {
+      try {
+        finishCloudArena(pet,await cloudArena(pet,'frame',{frameId:selectedFrame.id}));
+      } catch {
+        cloudFailure(pet);
+        return;
+      }
+    }
+    if (!pet.cloudId && !FRAME_PREVIEW && !frameUnlocked(selectedFrame, pet, ownedProducts) && !buyFrame(selectedFrame)) return;
     pet.frameId = selectedFrame.id;
     paintPortraitFrame(portrait, selectedFrame.id);
     if (photoCrop) {
@@ -1722,6 +1736,8 @@ function createPet(name, url, original, species = 'cat', portraitCrop) {
   const pet = {name, species, avatar:url, original, portraitCrop, card, button, fights:0, wins:0, streak:0, running:false, level:1, exp:0, points:0,
     slots:[null, null, null], loot:[],
     stats:{...START_STATS}, draft:{str:0, agi:0, vit:0, dex:0, luck:0}};
+  if (CLOUD_PREVIEW && window.Telegram?.WebApp?.initData && !restoringFighters)
+    pet.cloudId = crypto.randomUUID().replaceAll('-','');
   const pick = document.createElement('button');
   pick.type = 'button';
   pick.className = 'fighter-pick';
@@ -1796,10 +1812,20 @@ function createPet(name, url, original, species = 'cat', portraitCrop) {
     }
     item.after(stepper);
   });
-  card.querySelector('.confirm-upgrade').onclick = () => {
+  card.querySelector('.confirm-upgrade').onclick = async () => {
     const total = draftTotal(pet);
     if (pet !== current || pet.running || !total || total > pet.points) return;
     const hpChanged = pet.draft.vit > 0;
+    if (pet.cloudId) {
+      try {
+        const result = await cloudArena(pet,'upgrade',{boosts:{...pet.draft}});
+        for (const stat of Object.keys(pet.draft)) pet.draft[stat] = 0;
+        finishCloudArena(pet,result);
+        refreshUpgrade(pet);
+        if (hpChanged) refreshArenaHealth(pet);
+      } catch { cloudFailure(pet); }
+      return;
+    }
     for (const stat of Object.keys(pet.draft)) {
       pet.stats[stat] += pet.draft[stat];
       pet.draft[stat] = 0;
@@ -1812,8 +1838,18 @@ function createPet(name, url, original, species = 'cat', portraitCrop) {
   const resetDialog = byId('confirm-reset');
   card.querySelector('.reset-free').onclick = () => {
     if (pet !== current || pet.running || (freeResetUsed && !earnedResets) || !allocatedPoints(pet.stats)) return;
-    byId('apply-reset').onclick = () => {
+    byId('apply-reset').onclick = async () => {
       if (pet !== current || pet.running || (freeResetUsed && !earnedResets) || !allocatedPoints(pet.stats)) return;
+      if (pet.cloudId) {
+        try { finishCloudArena(pet,await cloudArena(pet,'reset')); }
+        catch { cloudFailure(pet); return; }
+        for (const stat of Object.keys(pet.draft)) pet.draft[stat] = 0;
+        resetDialog.close();
+        refreshUpgrade(pet);
+        fighters.forEach(refreshFreeReset);
+        if (!pet.awaitingNextFight) refreshArenaHealth(pet);
+        return;
+      }
       pet.points += allocatedPoints(pet.stats);
       pet.stats = {...START_STATS};
       for (const stat of Object.keys(pet.draft)) pet.draft[stat] = 0;
@@ -1978,12 +2014,17 @@ function renderInventory(pet) {
     sell.append(copyText('Продать ', 'Sell '), coinAmount(TROPHY_SALE));
     copy(sell, 'Продать ' + item.name + ' за ' + TROPHY_SALE + ' монету',
       'Sell ' + (EN_TROPHIES[item.name] ?? item.name) + ' for ' + TROPHY_SALE + ' coin', 'aria-label');
-    sell.onclick = () => {
+    sell.onclick = async () => {
       if (pet !== current || pet.running || pet.slots.includes(item)) return;
       const index = pet.loot.indexOf(item);
       if (index === -1) return;
-      pet.loot.splice(index, 1);
-      coins += TROPHY_SALE;
+      if (pet.cloudId) {
+        try { finishCloudArena(pet,await cloudArena(pet,'sell',{trophyId:item.id})); }
+        catch { cloudFailure(pet); return; }
+      } else {
+        pet.loot.splice(index,1);
+        coins += TROPHY_SALE;
+      }
       saveFighters();
       renderInventory(pet);
     };
@@ -2059,9 +2100,12 @@ function openLoot(pet, index, readOnly) {
       button.append(trophyIcon(item), copyText(label, labelEn));
     }
     else copy(button, label, labelEn);
-    button.onclick = () => {
+    button.onclick = async () => {
       if (pet !== current || pet.running || (item && pet.slots.includes(item))) return;
-      pet.slots[index] = item;
+      if (pet.cloudId) {
+        try { finishCloudArena(pet,await cloudArena(pet,'equip',{slot:index,trophyId:item?.id ?? null})); }
+        catch { cloudFailure(pet); return; }
+      } else pet.slots[index] = item;
       saveFighters();
       if (!pet.awaitingNextFight) refreshOpponentSlots(pet);
       refreshUpgrade(pet);
@@ -2468,10 +2512,34 @@ async function fight(pet) {
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const announcement = card.querySelector('.loot-announcement');
   announcement.hidden = true;
-  const opponent = pet.opponent;
+  let opponent = pet.opponent;
   button.disabled = byId('photo').disabled = byId('sample').disabled = true;
   refreshUpgrade(pet);
-  const {log, maxHP, won} = simulate(pet, opponent);
+  let serverBattle;
+  if (pet.cloudId) {
+    try {
+      serverBattle = await cloudArena(pet,'fight');
+      const challenger = serverBattle.opponent;
+      const photo = (botPhotos[challenger.species] ?? [])[0];
+      opponent = {...challenger,slots:[],
+        avatar:photo ? botPhotoBase+photo.avatar : undefined,
+        original:photo ? botPhotoBase+photo.photo : undefined};
+      const foe = card.querySelector('.fighter.foe');
+      foe.querySelector('strong').textContent = opponent.name;
+      setAvatar(foe,opponent.name,opponent.avatar ?? opponent.species,opponent.original);
+      const before = {exp:pet.exp,level:pet.level};
+      finishCloudArena(pet,serverBattle);
+      serverBattle.before = before;
+    } catch {
+      pet.running = false;
+      button.disabled = byId('photo').disabled = byId('sample').disabled = false;
+      fighters.forEach(fighter=>fighter.pick.disabled=false);
+      refreshUpgrade(pet);
+      cloudFailure(pet);
+      return;
+    }
+  }
+  const {log,maxHP,won} = serverBattle?.battle ?? simulate(pet,opponent);
   renderHealth(card, maxHP, maxHP);
   status.classList.remove('result');
   copy(status, 'Бой идёт…', 'Fight in progress…');
@@ -2502,24 +2570,25 @@ async function fight(pet) {
   }
   stage.classList.remove('fighting');
   delete cloud.dataset.impact;
-  const previousXP = pet.exp;
-  const previousLevel = pet.level;
-  const reward = recordArenaResult(pet, opponent, won);
+  const previousXP = serverBattle?.before.exp ?? pet.exp;
+  const previousLevel = serverBattle?.before.level ?? pet.level;
+  const reward = serverBattle?.reward ?? recordArenaResult(pet,opponent,won);
   portraits[won ? 0 : 1].classList.add('victory');
   portraits[won ? 1 : 0].classList.add('defeat');
   stage.classList.add('show-result');
   paintStreak(card.querySelector('.fighter'), pet.streak);
   paintStreak(card.querySelector('.foe'), opponentStreaks.get(opponent.name));
-  const trophy = rewardTrophy(pet, opponent, won);
+  const trophy = serverBattle ? serverBattle.trophy : rewardTrophy(pet,opponent,won);
+  if (serverBattle && trophy) { pet.hasNewTrophies = true; saveFighters(); }
   if (trophy) {
     announcement.replaceChildren(trophyIcon(trophy),
       copyText('Выпал трофей: ' + trophyText(trophy), 'Trophy earned: ' + trophyText(trophy, true)));
     announcement.hidden = false;
   }
-  let leveledUp = false;
-  let earnedReset = false;
+  let leveledUp = Boolean(serverBattle && pet.level > previousLevel);
+  let earnedReset = leveledUp && pet.level % RESET_REWARD_INTERVAL === 0;
   const threshold = xpToNextLevel(pet.level);
-  if (pet.exp >= threshold) {
+  if (!serverBattle && pet.exp >= threshold) {
     pet.exp = Math.round((pet.exp - threshold) * 10) / 10;
     pet.level++;
     pet.points += 2;
@@ -2605,7 +2674,54 @@ byId('photo').onchange = async event => {
   editor.scrollIntoView({block:'nearest'});
 };
 
-const persistentFighterFields = ['name','species','avatar','portraitCrop','frameId','fights','wins','streak',
+// shortcut: existing browser progress is local until it can be migrated without trusting client rewards.
+const CLOUD_PREVIEW = !selfTest && new URLSearchParams(location.search).get('cloud') === '1';
+const pendingArena = new WeakMap();
+
+function applyArenaState(pet, {state,account}) {
+  Object.assign(pet,state,{slots:state.slots.map(id=>state.loot.find(trophy=>trophy.id===id) ?? null)});
+  coins = account.coins;
+  freeResetUsed = account.freeResetUsed;
+  earnedResets = account.earnedResets;
+  ownedProducts.clear();
+  for (const frame of account.frames) ownedProducts.add(frame);
+}
+
+async function cloudArena(pet, command, fields={}) {
+  const app = window.Telegram?.WebApp;
+  if (!app?.initData) throw Error('auth');
+  const request = (route,body) => gameRequest(app,GAME_API+'/arena/'+route,{fighterId:pet.cloudId,...body});
+  if (!pet.cloudReady) {
+    const initial = await request('register',{species:pet.species});
+    applyArenaState(pet,initial);
+    pet.cloudReady = true;
+  }
+  if (command === 'register') return;
+  const key = JSON.stringify([command,fields]);
+  const pending = pendingArena.get(pet);
+  if (pending && pending.key !== key) throw Error('pending');
+  const operationId = pending?.operationId ?? crypto.randomUUID().replaceAll('-','');
+  pendingArena.set(pet,{key,operationId});
+  try {
+    return await request(command,{operationId,...fields});
+  } catch (error) {
+    if (!error.retry && error.message !== 'Failed to fetch') pendingArena.delete(pet);
+    throw error;
+  }
+}
+
+function finishCloudArena(pet,response) {
+  applyArenaState(pet,response);
+  pendingArena.delete(pet);
+  saveFighters();
+}
+
+function cloudFailure(pet) {
+  const status = pet.card.querySelector('.status');
+  copy(status,'Не удалось сохранить действие. Попробуй ещё раз.','Could not save the action. Try again.');
+}
+
+const persistentFighterFields = ['cloudId','name','species','avatar','portraitCrop','frameId','fights','wins','streak',
   'level','exp','points','slots','loot','stats','hasNewTrophies','photoFile'];
 let fighterStorage;
 let restoringFighters = false;
@@ -2622,7 +2738,7 @@ function openFighterStorage() {
 }
 
 function fighterSaveKey() {
-  return String(window.Telegram?.WebApp?.initDataUnsafe?.user?.id ?? 'browser');
+  return (CLOUD_PREVIEW ? 'cloud:' : '') + String(window.Telegram?.WebApp?.initDataUnsafe?.user?.id ?? 'browser');
 }
 
 function fighterSaveError() {
