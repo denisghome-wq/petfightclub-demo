@@ -1160,6 +1160,31 @@ async function gameRequest(app, url, args) {
   return data;
 }
 
+async function duelPortrait(pet) {
+  const crop = pet.portraitCrop;
+  const source = new Image();
+  if (pet.avatar) {
+    source.src = (crop && (crop.source ?? pet.original)) || pet.avatar;
+  } else {
+    const svg = icon(pet.species);
+    svg.setAttribute('xmlns','http://www.w3.org/2000/svg');
+    svg.setAttribute('width','320');
+    svg.setAttribute('height','320');
+    svg.setAttribute('fill','none');
+    svg.setAttribute('stroke','#57394d');
+    source.src = 'data:image/svg+xml,'+encodeURIComponent(svg.outerHTML);
+  }
+  await source.decode();
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 320;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#f4dcc9';
+  ctx.fillRect(0,0,320,320);
+  if (crop && pet.avatar) ctx.drawImage(source,crop.x,crop.y,crop.size,crop.size,0,0,320,320);
+  else ctx.drawImage(source,0,0,320,320);
+  return canvas.toDataURL('image/jpeg',.86).split(',')[1];
+}
+
 function showDuelDialog(pet) {
   const app = window.Telegram?.WebApp;
   const dialog = byId('duel-preview');
@@ -1183,9 +1208,16 @@ function showDuelDialog(pet) {
     status.hidden = false;
     copy(status, 'Подключение…', 'Connecting…');
     try {
+      let notifyGuest = false;
+      if (id) {
+        notifyGuest = app.initDataUnsafe?.user?.allows_write_to_pm === true;
+        if (!notifyGuest && typeof app.requestWriteAccess === 'function' && app.isVersionAtLeast?.('6.9')) {
+          notifyGuest = await new Promise(resolve => app.requestWriteAccess(resolve)).catch(() => false);
+        }
+      }
       await duelRequest(app,'register',{species:pet.species});
       if (id) {
-        const {result,side} = await duelRequest(app,'accept',{id});
+        const {result,side} = await duelRequest(app,'accept',{id,notifyGuest,language:uiLanguage});
         shownDuelId = id;
         const won = result.won === (side === 0);
         copy(status, won ? 'Победа в дружеской дуэли!' : 'Поражение в дружеской дуэли!',
@@ -1198,9 +1230,11 @@ function showDuelDialog(pet) {
           duelOperations.set(pet,operation);
         }
         const canShareCard = typeof app.shareMessage === 'function' && app.isVersionAtLeast?.('8.0');
-        const {url, preparedId, text} = await duelRequest(app,'create',{
-          operationId:operation, prepare:Boolean(canShareCard), language:uiLanguage
+        const {url, preparedId, text, currentPhoto} = await duelRequest(app,'create',{
+          operationId:operation, prepare:Boolean(canShareCard), language:uiLanguage,petName:pet.name,
+          photo:canShareCard ? await duelPortrait(pet).catch(() => { throw Error('photo_share'); }) : undefined
         });
+        if (canShareCard && (!preparedId || !currentPhoto)) throw Error('photo_share');
         const share = new URL('https://t.me/share/url');
         share.searchParams.set('url',url);
         share.searchParams.set('text', text ?? (uiLanguage === 'en'
@@ -1219,6 +1253,8 @@ function showDuelDialog(pet) {
     } catch (error) {
       if (!dialog.open) dialog.showModal();
       const messages = {
+        photo_share:['Не удалось подготовить приглашение с фото. Попробуй ещё раз.',
+          'Could not prepare the invitation photo. Try again.'],
         expired:['Срок приглашения истёк.','The invitation has expired.'],
         self:['Это твоё приглашение.','This is your invitation.'],
         claimed:['Приглашение уже приняли.','The invitation has already been accepted.'],
@@ -1770,7 +1806,7 @@ function createPet(name, url, original, species = 'cat', portraitCrop) {
   const portraitCopy = avatar.cloneNode(true);
   const upgradeName = title.cloneNode(true);
   card.querySelector('.upgrade-fighter').append(portraitCopy,upgradeName);
-  activatePet(pet);
+  if (!restoringFighters) activatePet(pet);
   button.onclick = () => fight(pet);
   const logToggle = card.querySelector('.log-toggle');
   const logEntries = card.querySelector('.battle-log ul');
@@ -2726,6 +2762,7 @@ const persistentFighterFields = ['cloudId','name','species','avatar','portraitCr
 let fighterStorage;
 let restoringFighters = false;
 let saveQueue = Promise.resolve();
+let savedActiveFighter;
 
 // This save belongs to the current Telegram WebView or browser profile.
 function openFighterStorage() {
@@ -2789,8 +2826,7 @@ async function restoreFighters() {
       refreshUpgrade(pet);
       refreshArenaHealth(pet);
     }
-    restoringFighters = false;
-    if (fighters.length) activatePet(fighters[saved.active] ?? fighters[0]);
+    savedActiveFighter = fighters[saved.active];
   } catch {
     fighterSaveError();
   } finally {
@@ -2802,6 +2838,29 @@ if (!selfTest) {
   const setupControls = [byId('sample'),byId('photo')];
   setupControls.forEach(control => control.disabled = true);
   await restoreFighters();
+  const app = window.Telegram?.WebApp;
+  if (CLOUD_PREVIEW && app?.initData) {
+    restoringFighters = true;
+    try {
+      const roster = await gameRequest(app,GAME_API+'/arena/roster',{});
+      for (const {id,species,state} of roster.fighters) {
+        const pet = fighters.find(pet => pet.cloudId === id) ??
+          createPet(uiLanguage === 'en' ? 'Pet' : 'Питомец',undefined,undefined,species);
+        Object.assign(pet,{cloudId:id,cloudReady:true});
+        applyArenaState(pet,{state,account:roster.account});
+        paintPortraitFrame(pet.card.querySelector('.fighter:not(.foe) .portrait'),pet.frameId);
+        refreshUpgrade(pet);
+        refreshArenaHealth(pet);
+      }
+    } catch {
+      const notice = byId('notice');
+      notice.hidden = false;
+      copy(notice,'Не удалось загрузить бойцов с сервера.','Could not load fighters from the server.');
+    } finally {
+      restoringFighters = false;
+    }
+  }
+  if (fighters.length) activatePet(savedActiveFighter ?? fighters[0]);
   setupControls.forEach(control => control.disabled = false);
 }
 
